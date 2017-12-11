@@ -6,8 +6,232 @@
 import networkx as nx
 import numpy as np
 import pandas as pd
-import argparse, random
+import argparse, random, os
 import matplotlib.pyplot as plt
+
+
+class NetworkGenerator:
+    """Easily simulate biological networks with implanted subnetworks.
+
+    This class provides an easy-to-use interface to simulate large networks
+    and to implant subnetworks into them.
+    """
+    def __init__(self, graph=None, num_nodes=None, min_num_edges=None):
+        # graph already specified
+        if not graph is None:
+            self.graph = graph
+            self.number_of_nodes = nx.number_of_nodes(graph)
+            self.minimum_number_of_edges = nx.number_of_edges(graph)
+        # graph is to be generated
+        elif not num_nodes is None and not min_num_edges is None:
+            self.number_of_nodes = num_nodes
+            self.minimum_number_of_edges = min_num_edges
+            self.graph = None
+        self.supported_formats = ['edgelist', 'gml']
+        self.implant_positions = []
+
+    def _get_neighbors(self, G, pos, closed_list):
+        return [i for i in nx.all_neighbors(G, pos) if not i in closed_list]
+
+    def _add_edges_if_required(self, G, pos_g, neighbors_G, neighbors_sub,
+                               next_node_count):
+        changed = False
+        if len(neighbors_sub) > len(neighbors_G):
+            changed = True
+            diff = len(neighbors_sub) - len(neighbors_G)
+            for i in range(diff):
+                G.add_node(next_node_count)
+                G.add_edge(pos_g, next_node_count)
+                #print ("new edge: {} -> {}".format(pos_g, next_node_count))
+                next_node_count += 1
+        return G, next_node_count, changed
+
+    def calculate_node_mapping(self, G, G_m, position):
+        """Calculates a mapping of nodes between network and subnetwork.
+
+        This method calculates a mapping between nodes in the real graph
+        and a subnetwork, given a position at which to implant the subnetwork.
+        It adds nodes and edges to the original graph if required for implantation.
+        """
+        next_node_name = nx.number_of_nodes(G)
+        pos_gm = list(G_m.nodes())[0]
+        pos_g = position
+        mapping = {pos_gm: pos_g}
+        to_explore = [pos_gm]
+        mapped_g = [pos_g]
+        mapped_gm = [pos_gm]
+        while not len(to_explore) is 0:
+            pos_gm = to_explore[0]
+            pos_g = mapping[pos_gm]
+            nbs_g = self._get_neighbors(G, pos_g, mapped_g)
+            nbs_gm = self._get_neighbors(G_m, pos_gm, mapped_gm)
+            # add node if more neighbors in motif than in G
+            G, next_node_name, changed = self._add_edges_if_required(G,
+                                                                     pos_g,
+                                                                     nbs_g,
+                                                                     nbs_gm,
+                                                                     next_node_name
+                                                                     )
+            if changed:
+                nbs_g = self._get_neighbors(G, pos_g, mapped_g)
+                nbs_gm = self._get_neighbors(G_m, pos_gm, mapped_gm)
+            to_explore.extend(nbs_gm) # add neighbors to open list
+
+            # map neighbors of current node
+            for i in range(len(nbs_gm)):
+                mapping[nbs_gm[i]] = nbs_g[i]
+                mapped_g.append(nbs_g[i])
+                mapped_gm.append(nbs_gm[i])
+            to_explore.pop(0) # remove from open list
+        return G, mapping
+
+    def _implant_single_motif(self, G, G_m, position):
+        """Implant a motif (G_m) at position in G.
+
+        This method incorporates a graph motif G_m into the graph G at position.
+        It is done recursively.
+        """
+        # construct a mapping from G_m to G
+        G, mapping = self.calculate_node_mapping(G, G_m, position)
+        # now, add edges to graph according to subnetwork
+        for from_gm, to_gm in G_m.edges():
+            if not G.has_edge(mapping[from_gm], mapping[to_gm]):
+                G.add_edge(mapping[from_gm], mapping[to_gm])
+        return G
+
+    def implant_motifs(self, G, subnetworks):
+        """Implant subnetworks in a given graph.
+
+        This method implants subnetworks into a given network.
+        This is done by iteratively mapping nodes from the subnetwork
+        to nodes from the original graph and adding nodes if required.
+        """
+        implant_positions = []
+        for sub_idx in range(len(subnetworks)):
+            position = random.randrange(0, nx.number_of_nodes(G))
+            print ("Implanting network {} at position: {}".format(sub_idx, position))
+            G = self._implant_single_motif(G, subnetworks[sub_idx], position)
+            implant_positions.append(position)
+        return G, implant_positions
+
+    def plot_distributions(self, out_dir='.'):
+        """Plot the distribution of node degrees and shortest paths.
+        """
+        # plot node degree distribution
+        degrees = np.array([v for k, v in list(self.graph.degree())])
+        fig = plt.figure(figsize=(14, 8))
+        plt.hist(degrees, bins=np.arange(0, 100, 1))
+        plt.xlabel('Node Degree')
+        plt.ylabel('Frequency')
+        plt.title('Node Degree Distribution')
+        fig.savefig(os.path.join(out_dir, 'network_node_distribution.png'))
+
+        # plot distribution of shortest paths
+        paths = pd.DataFrame(dict(nx.shortest_path_length(self.graph)))
+        fig = plt.figure(figsize=(14, 8))
+        plt.hist(paths.values.flatten(), bins=np.arange(0, 15, 1))
+        plt.xlabel('Shortest Path Length')
+        plt.ylabel('Frequency')
+        plt.title('Distribution of Distance Between Nodes')
+        fig.savefig(os.path.join(out_dir, 'network_paths_distribution.png'))
+
+    def generate_network(self, subnetworks):
+        """Generate a biological network with implanted subnetworks.
+
+        This method generates a network that has biological properties
+        like following a power law distribution for the node degrees and
+        containing hubs and bottlenecks as well as a whole lot of low-degree
+        nodes.
+        Furthermore, subnetworks will be implanted to the graph randomly, disturbing
+        the network structure as little as possible while still containing the
+        desired subnetwork topology.
+
+        Parameters:
+        -----------
+        subnetworks:            The subnetworks to insert into the network.
+
+        Returns:
+        A simulated network with biological properties and implanted subnetworks
+        as well as as list of the positions at which insertion happened.
+        """
+        # Create random network.
+        print ("Creating Network...")
+        for i in range(1, self.number_of_nodes):
+            G = nx.barabasi_albert_graph(n=self.number_of_nodes, m=i, seed=42)
+            if nx.number_of_edges(G) > self.minimum_number_of_edges:
+                break
+
+        # implant motifs and return
+        print ("Network built! Implanting {} subnetworks...".format(len(subnetworks)))
+        G, positions = self.implant_motifs(G, subnetworks)
+
+        # output some statistics and return
+        print ("Done! Created network with {} nodes and {} edges".format(nx.number_of_nodes(G),
+                                                                         nx.number_of_edges(G))
+               )
+        self.graph = G
+        self.implant_positions = positions
+        return G, positions
+
+    def read_subnetworks(self, subnet_dir, f_format='edgelist'):
+        """Read the subnetworks to implant from disk.
+
+        Supported formats are edgelist and gml for the moment.
+        The method traverses the given directory and searches for files with
+        the endings corresponding to the file format. Once, such a file is
+        found, it is read to a networkx graph object.
+        Parameters:
+        ----------
+        subnet_dir:             The directory in which the subnetworks are
+                                located. Each file corresponds to one subnetwork
+        f_format:               The file format of the subnetworks.
+
+        Returns:
+        A list with the subnetworks.
+        """
+        # check if file format is supported
+        if not f_format in self.supported_formats:
+            print ("{} is not supported. Please provide your subnetworks as one of {}".format(f_format, self.supported_formats))
+
+        # read subnetworks and return them
+        subnetworks = []
+        for files in os.listdir(subnet_dir):
+            f_path = os.path.join(subnet_dir, files)
+            if files.endswith(f_format):
+                if f_format is 'edgelist':
+                    print ("Found valid edgelist subnetwork in {}".format(f_path))
+                    subnetworks.append(nx.read_edgelist(f_path))
+                elif f_format is 'gml':
+                    print ("Found valid gml subnetwork in {}".format(f_path))
+                    subnetworks.append(nx.read_gml(f_path))
+        return subnetworks
+
+
+    def draw_network(self, out_dir):
+        if not self.graph is None:
+            fig = plt.figure(figsize=(14, 8))
+            nx.draw(self.graph, with_labels=True)
+            fig.savefig(os.path.join(out_dir, 'network.png'))
+
+
+    def save_network(self, out_dir, f_format='edgelist'):
+        """Write the generated network to file.
+        """
+        # check that file format is supported
+        if not f_format in self.supported_formats:
+            print ("{} is not a supported file format. Try one of {}".format(f_format, self.supported_formats))
+            return
+
+        if f_format is 'edgelist':
+            nx.write_edgelist(self.graph, os.path.join(out_dir, 'network.edgelist'))
+        elif f_format is 'gml':
+            nx.write_gml(self.graph, os.path.join(out_dir, 'network.gml'))
+
+        if not self.implant_positions is None:
+            with open(os.path.join(out_dir, 'implant_positions.txt'), 'w') as f:
+                for pos in self.implant_positions:
+                    f.write('{}\n'.format(pos))
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Generate Random Network with Graph Motifs')
@@ -20,176 +244,39 @@ def parse_args():
                         dest='min_edge_num',
                         type=int
                         )
-    parser.add_argument('--subnetworks',
-                        help='Path to File with subnetworks',
-                        dest='subnet_path',
+    parser.add_argument('--subnetpath',
+                        help='Path to dir with subnetworks',
+                        dest='subnetpath',
+                        default=None,
                         type=str
                         )
-    parser.add_argument('--out',
-                        help='Path to output file',
-                        dest='out_path',
+    parser.add_argument('--outdir',
+                        help='Path to output directory (writes network and plots)',
+                        dest='outdir',
                         type=str
                         )
     args = parser.parse_args()
-    return args.node_num, args.min_edge_num, args.subnet_path, args.out_path
+    return args.node_num, args.min_edge_num, args.subnetpath, args.outdir
 
-def _get_neighbors(G, pos, closed_list):
-    return [i for i in nx.all_neighbors(G, pos) if not i in closed_list]
-
-def _add_edges_if_required(G, pos_g, neighbors_G, neighbors_sub, next_node_count):
-    changed = False
-    if len(neighbors_sub) > len(neighbors_G):
-        changed = True
-        diff = len(neighbors_sub) - len(neighbors_G)
-        for i in range(diff):
-            G.add_node(next_node_count)
-            G.add_edge(pos_g, next_node_count)
-            #print ("new edge: {} -> {}".format(pos_g, next_node_count))
-            next_node_count += 1
-    return G, next_node_count, changed
-
-
-def calculate_node_mapping(G, G_m, position):
-    """Calculates a mapping of nodes between network and subnetwork.
-
-    This method calculates a mapping between nodes in the real graph
-    and a subnetwork, given a position at which to implant the subnetwork.
-    It adds nodes and edges to the original graph if required for implantation.
-    """
-    next_node_name = nx.number_of_nodes(G)
-    pos_gm = list(G_m.nodes())[0]
-    pos_g = position
-    mapping = {pos_gm: pos_g}
-    to_explore = [pos_gm]
-    mapped_g = [pos_g]
-    mapped_gm = [pos_gm]
-    while not len(to_explore) is 0:
-        pos_gm = to_explore[0]
-        pos_g = mapping[pos_gm]
-        nbs_g = _get_neighbors(G, pos_g, mapped_g)
-        nbs_gm = _get_neighbors(G_m, pos_gm, mapped_gm)
-        # add node if more neighbors in motif than in G
-        G, next_node_name, changed = _add_edges_if_required(G,
-                                                            pos_g,
-                                                            nbs_g,
-                                                            nbs_gm,
-                                                            next_node_name
-                                                            )
-        if changed:
-            nbs_g = _get_neighbors(G, pos_g, mapped_g)
-            nbs_gm = _get_neighbors(G_m, pos_gm, mapped_gm)
-        to_explore.extend(nbs_gm) # add neighbors to open list
-
-        # map neighbors of current node
-        for i in range(len(nbs_gm)):
-            mapping[nbs_gm[i]] = nbs_g[i]
-            mapped_g.append(nbs_g[i])
-            mapped_gm.append(nbs_gm[i])
-        to_explore.pop(0) # remove from open list
-    return G, mapping
-
-def implant_single_motif(G, G_m, position):
-    """Implant a motif (G_m) at position in G.
-
-    This method incorporates a graph motif G_m into the graph G at position.
-    It is done recursively.
-    """
-    # construct a mapping from G_m to G
-    G, mapping = calculate_node_mapping(G, G_m, position)
-
-    # now, add edges to graph according to subnetwork
-    for from_gm, to_gm in G_m.edges():
-        if not G.has_edge(mapping[from_gm], mapping[to_gm]):
-            G.add_edge(mapping[from_gm], mapping[to_gm])
-    return G
-
-
-def implant_motifs(G, subnetworks):
-    """Implant subnetworks in a given graph.
-
-    This method implants subnetworks into a given network.
-    This is done by iteratively mapping nodes from the subnetwork
-    to nodes from the original graph and adding nodes if required.
-    """
-    implant_positions = []
-    for sub_idx in range(len(subnetworks)):
-        position = random.randrange(0, nx.number_of_nodes(G))
-        print ("Implanting network {} at position: {}".format(sub_idx, position))
-        G = implant_single_motif(G, subnetworks[sub_idx], position)
-        implant_positions.append(position)
-    return G, implant_positions
-
-def generate_network(node_num, min_edge_num, subnetworks):
-    """Generate a biological network with implanted subnetworks.
-
-    This method generates a network that has biological properties
-    like following a power law distribution for the node degrees and
-    containing hubs and bottlenecks as well as a whole lot of low-degree
-    nodes.
-    Furthermore, subnetworks will be implanted to the graph randomly, disturbing
-    the network structure as little as possible while still containing the
-    desired subnetwork topology.
-    """
-    # Create random network.
-    print ("Creating Network...")
-    for i in range(1, node_num):
-        G = nx.powerlaw_cluster_graph(node_num, i, 0.8, seed=42)
-        if nx.number_of_edges(G) > min_edge_num:
-            break
-
-    # implant motifs and return
-    print ("Network built! Implanting {} subnetworks...".format(len(subnetworks)))
-    G, positions = implant_motifs(G, subnetworks)
-
-    # plot node degree distribution
-    print ("Implanted subnetworks! Plotting node degree distribution...")
-    degrees = np.array([v for k, v in list(G.degree())])
-    fig = plt.figure(figsize=(14, 8))
-    plt.hist(degrees, bins=np.arange(0, 100, 1))
-    fig.savefig('random_network_distribution.png')
-
-    # output some statistics and return
-    print ("Done! Created network with {} nodes and {} edges".format(nx.number_of_nodes(G),
-                                                                     nx.number_of_edges(G))
-           )
-    return G, positions
 
 if __name__ == "__main__":
-    node_num, min_edge_num, subnet_path, out_path = parse_args()
-    subnetworks = []
-    # star
-    A1 = np.array([[0,1,1,1],
-                   [1,0,0,0],
-                   [1,0,0,0],
-                   [1,0,0,0]])
-    subnetworks.append(nx.from_numpy_matrix(A1))
-    # complex
-    A2 = np.array([[0,1,0,0,0,0,0,0],
-                   [1,0,1,1,0,0,0,0],
-                   [0,1,0,1,1,0,0,0],
-                   [0,1,1,0,0,0,0,1],
-                   [0,0,1,0,0,1,1,0],
-                   [0,0,0,0,1,0,0,0],
-                   [0,0,0,0,1,0,0,0],
-                   [0,0,0,1,0,0,0,0]])
-    #subnetworks.append(nx.from_numpy_matrix(A2))
-    # clique
-    A3 = np.array([[0,1,1,1],
-                   [1,0,1,1],
-                   [1,1,0,1],
-                   [1,1,1,0]])
-    subnetworks.append(nx.from_numpy_matrix(A3))
-    # network
-    A = np.array([[0,1,0,0,0,0,0,0],
-                  [1,0,1,1,0,0,0,0],
-                  [0,1,0,1,1,0,0,0],
-                  [0,1,1,0,0,0,0,1],
-                  [0,0,1,0,0,1,1,0],
-                  [0,0,0,0,1,0,0,0],
-                  [0,0,0,0,1,0,0,0],
-                  [0,0,0,1,0,0,0,0]])
-    G, positions = implant_motifs(nx.from_numpy_matrix(A), subnetworks)
-    #G, positions = generate_network(node_num, min_edge_num, subnetworks)
-
-    nx.draw(G, with_labels=True)
-    plt.savefig('network.png')
+    node_num, min_edge_num, subnet_dir, out_dir = parse_args()
+    simulator = NetworkGenerator(num_nodes=node_num,
+                                 min_num_edges=min_edge_num)
+    if not subnet_dir is None:
+        subnetworks = simulator.read_subnetworks(subnet_dir)
+    else:
+        A = np.array([[0,1,1,1],
+                      [1,0,1,1],
+                      [1,1,0,1],
+                      [1,1,1,0]]) # clique
+        subnetworks = [nx.from_numpy_matrix(A)] * 10
+    G, insert_pos = simulator.generate_network(subnetworks)
+    if not out_dir is None:
+        simulator.plot_distributions(out_dir)
+        simulator.save_network(out_dir)
+    else:
+        simulator.plot_distributions()
+        simulator.save_network('.')
+    if node_num < 100: # draw when not so many nodes
+        simulator.draw_network('.')
