@@ -287,20 +287,26 @@ def parse_args():
                         default=None,
                         type=str
                         )
+    parser.add_argument('--insert_strategy',
+                        help='How to insert the subnetworks',
+                        dest='insert_strategy',
+                        default='random',
+                        type=str
+                        )
     parser.add_argument('--outdir',
                         help='Path to output directory (writes network and plots)',
                         dest='outdir',
                         type=str
                         )
     args = parser.parse_args()
-    return args.node_num, args.min_edge_num, args.subnetpath, args.outdir
+    return args.node_num, args.min_edge_num, args.subnetpath, args.insert_strategy, args.outdir
 
 
 if __name__ == "__main__":
-    node_num, min_edge_num, subnet_dir, out_dir = parse_args()
+    node_num, min_edge_num, subnet_dir, insert_strat, out_dir = parse_args()
     simulator = NetworkGenerator(num_nodes=node_num,
                                  min_num_edges=min_edge_num,
-                                 insert_strategy='pagerank')
+                                 insert_strategy=insert_strat)
     if not subnet_dir is None:
         subnetworks = simulator.read_subnetworks(subnet_dir)
     else:
