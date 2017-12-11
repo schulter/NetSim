@@ -6,7 +6,7 @@
 import networkx as nx
 import numpy as np
 import pandas as pd
-import argparse, random, os
+import argparse, random, os, operator
 import matplotlib.pyplot as plt
 
 
@@ -16,7 +16,8 @@ class NetworkGenerator:
     This class provides an easy-to-use interface to simulate large networks
     and to implant subnetworks into them.
     """
-    def __init__(self, graph=None, num_nodes=None, min_num_edges=None):
+    def __init__(self, graph=None, num_nodes=None, min_num_edges=None,
+                 insert_strategy='random'):
         # graph already specified
         if not graph is None:
             self.graph = graph
@@ -29,9 +30,45 @@ class NetworkGenerator:
             self.graph = None
         self.supported_formats = ['edgelist', 'gml']
         self.implant_positions = []
+        if insert_strategy is 'random':
+            self.calculate_insert_positions = self.random_insert_strategy
+        elif insert_strategy is 'pagerank':
+            self.calculate_insert_positions = self.pagerank_insert_strategy
+        else:
+            raise Exception("Unknown insert strategy {}".format(insert_strategy))
+
+    def random_insert_strategy(self, G):
+        return random.sample(range(0, self.number_of_nodes), self.number_of_nodes)
+
+    def pagerank_insert_strategy(self, G):
+        scores = nx.pagerank(G)
+        sorted_scores = sorted(scores.items(), key=operator.itemgetter(1))[::-1]
+        return [k for k, v in sorted_scores]
 
     def _get_neighbors(self, G, pos, closed_list):
         return [i for i in nx.all_neighbors(G, pos) if not i in closed_list]
+
+    def _insert_strategy(self, G, num_of_inserts, min_distance=2):
+        # get insert positions (as many as nodes in network)
+        # TODO: This method does not have any failsafe if we run out of positions
+        scores = self.calculate_insert_positions(G)
+
+        # add highest ranks as insert positions
+        insert_positions = []
+        found = 0
+        while num_of_inserts > found:
+            attempts = 0
+            insert_pos = scores[found + attempts]
+            allowed = True
+            for pos in insert_positions:
+                if nx.shortest_path_length(insert_pos, pos) < min_distance:
+                    allowed = False
+                attempts += 1
+            if allowed:
+                insert_positions.append(insert_pos)
+                found += 1
+        assert (len(insert_positions) == num_of_inserts)
+        return insert_positions
 
     def _add_edges_if_required(self, G, pos_g, neighbors_G, neighbors_sub,
                                next_node_count):
@@ -106,9 +143,9 @@ class NetworkGenerator:
         This is done by iteratively mapping nodes from the subnetwork
         to nodes from the original graph and adding nodes if required.
         """
-        implant_positions = []
+        implant_positions = self._insert_strategy(G, len(subnetworks))
         for sub_idx in range(len(subnetworks)):
-            position = random.randrange(0, nx.number_of_nodes(G))
+            position = implant_positions[sub_idx]
             print ("Implanting network {} at position: {}".format(sub_idx, position))
             G = self._implant_single_motif(G, subnetworks[sub_idx], position)
             implant_positions.append(position)
@@ -262,7 +299,8 @@ def parse_args():
 if __name__ == "__main__":
     node_num, min_edge_num, subnet_dir, out_dir = parse_args()
     simulator = NetworkGenerator(num_nodes=node_num,
-                                 min_num_edges=min_edge_num)
+                                 min_num_edges=min_edge_num,
+                                 insert_strategy='pagerank')
     if not subnet_dir is None:
         subnetworks = simulator.read_subnetworks(subnet_dir)
     else:
