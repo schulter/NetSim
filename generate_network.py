@@ -29,7 +29,8 @@ class NetworkGenerator:
             self.minimum_number_of_edges = min_num_edges
             self.graph = None
         self.supported_formats = ['edgelist', 'gml']
-        self.implant_positions = []
+        self.mappings = None
+        self.insert_strategy_name = insert_strategy
         if insert_strategy is 'random':
             self.calculate_insert_positions = self.random_insert_strategy
         elif insert_strategy is 'pagerank':
@@ -56,17 +57,18 @@ class NetworkGenerator:
         # add highest ranks as insert positions
         insert_positions = []
         found = 0
+        attempts = 0
         while num_of_inserts > found:
-            attempts = 0
             insert_pos = scores[found + attempts]
             allowed = True
             for pos in insert_positions:
-                if nx.shortest_path_length(insert_pos, pos) < min_distance:
+                if nx.shortest_path_length(G, insert_pos, pos) < min_distance:
                     allowed = False
                 attempts += 1
             if allowed:
                 insert_positions.append(insert_pos)
                 found += 1
+                attempts = 0
         assert (len(insert_positions) == num_of_inserts)
         return insert_positions
 
@@ -134,7 +136,7 @@ class NetworkGenerator:
         for from_gm, to_gm in G_m.edges():
             if not G.has_edge(mapping[from_gm], mapping[to_gm]):
                 G.add_edge(mapping[from_gm], mapping[to_gm])
-        return G
+        return G, mapping
 
     def implant_motifs(self, G, subnetworks):
         """Implant subnetworks in a given graph.
@@ -144,12 +146,15 @@ class NetworkGenerator:
         to nodes from the original graph and adding nodes if required.
         """
         implant_positions = self._insert_strategy(G, len(subnetworks))
+        mappings = []
         for sub_idx in range(len(subnetworks)):
             position = implant_positions[sub_idx]
             print ("Implanting network {} at position: {}".format(sub_idx, position))
-            G = self._implant_single_motif(G, subnetworks[sub_idx], position)
-            implant_positions.append(position)
-        return G, implant_positions
+            G, mapping = self._implant_single_motif(G,
+                                                    subnetworks[sub_idx],
+                                                    position)
+            mappings.append(mapping)
+        return G, mappings
 
     def plot_distributions(self, out_dir='.'):
         """Plot the distribution of node degrees and shortest paths.
@@ -157,7 +162,7 @@ class NetworkGenerator:
         # plot node degree distribution
         degrees = np.array([v for k, v in list(self.graph.degree())])
         fig = plt.figure(figsize=(14, 8))
-        plt.hist(degrees, bins=np.arange(0, 100, 1))
+        plt.hist(degrees, bins=np.arange(0, degrees.max(), 1))
         plt.xlabel('Node Degree')
         plt.ylabel('Frequency')
         plt.title('Node Degree Distribution')
@@ -166,7 +171,7 @@ class NetworkGenerator:
         # plot distribution of shortest paths
         paths = pd.DataFrame(dict(nx.shortest_path_length(self.graph)))
         fig = plt.figure(figsize=(14, 8))
-        plt.hist(paths.values.flatten(), bins=np.arange(0, 15, 1))
+        plt.hist(paths.values.flatten(), bins=np.arange(0, 8, 1))
         plt.xlabel('Shortest Path Length')
         plt.ylabel('Frequency')
         plt.title('Distribution of Distance Between Nodes')
@@ -194,21 +199,22 @@ class NetworkGenerator:
         # Create random network.
         print ("Creating Network...")
         for i in range(1, self.number_of_nodes):
-            G = nx.barabasi_albert_graph(n=self.number_of_nodes, m=i, seed=42)
+            G = nx.barabasi_albert_graph(n=self.number_of_nodes, m=i)
             if nx.number_of_edges(G) > self.minimum_number_of_edges:
                 break
 
         # implant motifs and return
-        print ("Network built! Implanting {} subnetworks...".format(len(subnetworks)))
-        G, positions = self.implant_motifs(G, subnetworks)
+        print ("Network built! Implanting {} subnetworks using {} strategy...".format(len(subnetworks),
+                                                                                      self.insert_strategy_name))
+        G, mappings = self.implant_motifs(G, subnetworks)
 
         # output some statistics and return
         print ("Done! Created network with {} nodes and {} edges".format(nx.number_of_nodes(G),
                                                                          nx.number_of_edges(G))
                )
         self.graph = G
-        self.implant_positions = positions
-        return G, positions
+        self.mappings = mappings
+        return G, mappings
 
     def read_subnetworks(self, subnet_dir, f_format='edgelist'):
         """Read the subnetworks to implant from disk.
@@ -264,10 +270,16 @@ class NetworkGenerator:
         elif f_format is 'gml':
             nx.write_gml(self.graph, os.path.join(out_dir, 'network.gml'))
 
-        if not self.implant_positions is None:
+        if not self.mappings is None:
             with open(os.path.join(out_dir, 'implant_positions.txt'), 'w') as f:
-                for pos in self.implant_positions:
-                    f.write('{}\n'.format(pos))
+                count = 1
+                f.write('# subnetwork insert positions. Each row corresponds to a subnetwork and each column to a position in it.\n')
+                for m in self.mappings:
+                    f.write('Subnetwork {}: '.format(count))
+                    for fro, to in m.items():
+                        f.write('{}\t'.format(to))
+                    f.write('\n')
+                    count += 1
 
 
 def parse_args():
@@ -310,11 +322,12 @@ if __name__ == "__main__":
     if not subnet_dir is None:
         subnetworks = simulator.read_subnetworks(subnet_dir)
     else:
-        A = np.array([[0,1,1,1],
-                      [1,0,1,1],
-                      [1,1,0,1],
-                      [1,1,1,0]]) # clique
-        subnetworks = [nx.from_numpy_matrix(A)] * 10
+        A = np.array([[0,1,1,1,1],
+                      [1,0,1,1,1],
+                      [1,1,0,1,1],
+                      [1,1,1,0,1],
+                      [1,1,1,1,0]]) # clique
+        subnetworks = [nx.from_numpy_matrix(A)] * 30
     G, insert_pos = simulator.generate_network(subnetworks)
     if not out_dir is None:
         simulator.plot_distributions(out_dir)
@@ -322,5 +335,5 @@ if __name__ == "__main__":
     else:
         simulator.plot_distributions()
         simulator.save_network('.')
-    if node_num < 100: # draw when not so many nodes
+    if node_num < 300: # draw when not so many nodes
         simulator.draw_network('.')
