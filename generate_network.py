@@ -31,9 +31,9 @@ class NetworkGenerator:
         self.supported_formats = ['edgelist', 'gml']
         self.mappings = None
         self.insert_strategy_name = insert_strategy
-        if insert_strategy is 'random':
+        if insert_strategy == 'random':
             self.calculate_insert_positions = self.random_insert_strategy
-        elif insert_strategy is 'pagerank':
+        elif insert_strategy == 'pagerank':
             self.calculate_insert_positions = self.pagerank_insert_strategy
         else:
             raise Exception("Unknown insert strategy {}".format(insert_strategy))
@@ -49,7 +49,7 @@ class NetworkGenerator:
     def _get_neighbors(self, G, pos, closed_list):
         return [i for i in nx.all_neighbors(G, pos) if not i in closed_list]
 
-    def _insert_strategy(self, G, num_of_inserts, min_distance=2):
+    def _insert_strategy(self, G, num_of_inserts, min_distance=3):
         # get insert positions (as many as nodes in network)
         # TODO: This method does not have any failsafe if we run out of positions
         scores = self.calculate_insert_positions(G)
@@ -327,7 +327,7 @@ if __name__ == "__main__":
                       [1,1,0,1,1],
                       [1,1,1,0,1],
                       [1,1,1,1,0]]) # clique
-        subnetworks = [nx.from_numpy_matrix(A)] * 30
+        subnetworks = [nx.from_numpy_matrix(A)] * 38
     G, insert_pos = simulator.generate_network(subnetworks)
     if not out_dir is None:
         simulator.plot_distributions(out_dir)
