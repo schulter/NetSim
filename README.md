@@ -1,9 +1,9 @@
 # NetSim
 This package will simulate realistic biological networks and implant subnetworks into them.
-NetSim consists of two parts that let you create:
-
-1. Realistic biological networks with implanted subnetworks like cancer modules or similar.
-2. RNA-seq count data for the same genes that can overlay the network.
+NetSim consists of two parts that let you create realistic biological networks with implanted subnetworks like cancer modules or similar. It uses the Barabasi-Albert graph to create a network and then inserts subnetworks into it.
+NetSim offers two insertion strategies (strategies to find nodes at which the subnetworks are inserted):
+1. Random
+2. PageRank (the subnetwork will be inserted at positions that have the highest PageRank indices in the network)
 
 ## Usage
 To simulate your network, you can run the script or access NetSim programmatically.
